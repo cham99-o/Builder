@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Construction 360 Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/marzipano@0.10.1/dist/marzipano.js"></script>
+  <style>
+    .marker {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background-color: #f59e0b;
+      border: 2px solid #1f2937;
+      border-radius: 50%;
+      cursor: pointer;
+      transform: translate(-50%, -50%);
+    }
+    #floorplan {
+      position: relative;
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+  <div class="container mx-auto p-4">
+    <h1 class="text-2xl font-bold text-yellow-400 mb-4">Construction 360 Tracker</h1>
+
+    <div class="mb-4">
+      <label class="block mb-2 text-sm font-medium">Upload Floorplan:</label>
+      <input type="file" accept="image/*" id="floorplanUpload" class="block text-white" />
+    </div>
+
+    <div id="floorplan" class="w-full h-[600px] bg-gray-800 border border-gray-600 rounded relative overflow-hidden"></div>
+  </div>
+
+  <!-- 360 Viewer Modal -->
+  <div id="viewerModal" class="fixed inset-0 hidden bg-black bg-opacity-80 items-center justify-center z-50">
+    <div class="bg-gray-900 rounded shadow-lg w-[80%] h-[80%] relative">
+      <button onclick="closeViewer()" class="absolute top-2 right-2 text-white px-3 py-1 bg-red-600 rounded">X</button>
+      <div id="pano" class="w-full h-full"></div>
+    </div>
+  </div>
+
+  <script>
+    const floorplan = document.getElementById("floorplan");
+    const upload = document.getElementById("floorplanUpload");
+    const modal = document.getElementById("viewerModal");
+    const panoContainer = document.getElementById("pano");
+    let viewer;
+
+    // Track all markers and their image history
+    let markerData = [];
+
+    upload.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        floorplan.style.backgroundImage = `url(${event.target.result})`;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    floorplan.addEventListener("click", (e) => {
+      const rect = floorplan.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const marker = document.createElement("div");
+      marker.className = "marker";
+      marker.style.left = `${x}px`;
+      marker.style.top = `${y}px`;
+
+      const id = Date.now();
+      const imageHistory = [];
+
+      marker.onclick = () => showUploadDialog(id);
+      floorplan.appendChild(marker);
+      markerData.push({ id, x, y, imageHistory });
+    });
+
+    function showUploadDialog(id) {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.onchange = (e) => {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const marker = markerData.find(m => m.id === id);
+          marker.imageHistory.push({ time: new Date().toISOString(), url: event.target.result });
+          view360(event.target.result);
+        };
+        reader.readAsDataURL(file);
+      };
+      input.click();
+    }
+
+    function view360(imageURL) {
+      modal.classList.remove("hidden");
+      panoContainer.innerHTML = ""; // Clear previous
+      viewer = new Marzipano.Viewer(panoContainer);
+
+      const source = Marzipano.ImageUrlSource.fromString(imageURL);
+      const geometry = new Marzipano.EquirectGeometry([{ width: 4000 }]);
+      const limiter = Marzipano.util.compose(
+        Marzipano.RectilinearView.limit.traditional(1024, 100 * Math.PI / 180),
+        Marzipano.RectilinearView.limit.vfov(30 * Math.PI / 180, 100 * Math.PI / 180)
+      );
+      const view = new Marzipano.RectilinearView(null, limiter);
+      const scene = viewer.createScene({ source, geometry, view });
+      scene.switchTo();
+    }
+
+    function closeViewer() {
+      modal.classList.add("hidden");
+    }
+  </script>
+</body>
+</html>
