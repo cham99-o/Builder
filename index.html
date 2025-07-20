@@ -6,116 +6,220 @@
   <title>Construction 360 Tracker</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/marzipano@0.10.1/dist/marzipano.js"></script>
-  <style>
-    .marker {
-      position: absolute;
-      width: 20px;
-      height: 20px;
-      background-color: #f59e0b;
-      border: 2px solid #1f2937;
-      border-radius: 50%;
-      cursor: pointer;
-      transform: translate(-50%, -50%);
-    }
-    #floorplan {
-      position: relative;
-      background-size: contain;
-      background-repeat: no-repeat;
-      background-position: center;
-    }
-  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
-<body class="bg-gray-900 text-white min-h-screen">
-  <div class="container mx-auto p-4">
-    <h1 class="text-2xl font-bold text-yellow-400 mb-4">Construction 360 Tracker</h1>
+<body class="bg-gray-900 text-white">
+  <div class="flex h-screen">
+    <!-- Sidebar -->
+    <div class="w-80 bg-gray-800 p-4 space-y-4 overflow-y-auto">
+      <h1 class="text-xl font-bold text-yellow-400">Construction 360 Tracker</h1>
 
-    <div class="mb-4">
-      <label class="block mb-2 text-sm font-medium">Upload Floorplan:</label>
-      <input type="file" accept="image/*" id="floorplanUpload" class="block text-white" />
+      <div>
+        <label class="block text-sm font-medium mb-1">Upload Floorplan PDF</label>
+        <input type="file" id="pdfUpload" accept="application/pdf" class="w-full text-sm" />
+        <div class="mt-2">
+          <label class="text-xs">Page:</label>
+          <select id="pageSelect" class="text-black w-full mt-1 p-1 rounded"></select>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">Saved Project</label>
+        <input type="file" id="loadProject" accept="application/json" class="w-full text-sm" />
+        <button id="saveProject" class="mt-2 px-2 py-1 bg-yellow-500 text-black rounded w-full">Save Project</button>
+      </div>
+
+      <div id="markerList" class="space-y-2 text-sm">
+        <h2 class="font-semibold mt-4">Markers</h2>
+        <!-- Marker history will go here -->
+      </div>
     </div>
 
-    <div id="floorplan" class="w-full h-[600px] bg-gray-800 border border-gray-600 rounded relative overflow-hidden"></div>
+    <!-- Floorplan Viewer -->
+    <div class="flex-1 relative">
+      <canvas id="pdfCanvas" class="w-full h-full cursor-crosshair"></canvas>
+      <div id="markerOverlay" class="absolute top-0 left-0 w-full h-full pointer-events-none"></div>
+    </div>
   </div>
 
   <!-- 360 Viewer Modal -->
-  <div id="viewerModal" class="fixed inset-0 hidden bg-black bg-opacity-80 items-center justify-center z-50">
-    <div class="bg-gray-900 rounded shadow-lg w-[80%] h-[80%] relative">
+  <div id="viewerModal" class="fixed inset-0 hidden bg-black bg-opacity-90 items-center justify-center z-50">
+    <div class="w-[90%] h-[90%] relative bg-gray-900 rounded shadow-lg">
       <button onclick="closeViewer()" class="absolute top-2 right-2 text-white px-3 py-1 bg-red-600 rounded">X</button>
       <div id="pano" class="w-full h-full"></div>
     </div>
   </div>
 
   <script>
-    const floorplan = document.getElementById("floorplan");
-    const upload = document.getElementById("floorplanUpload");
-    const modal = document.getElementById("viewerModal");
+    let pdfDoc = null;
+    let currentPage = 1;
+    const canvas = document.getElementById("pdfCanvas");
+    const ctx = canvas.getContext("2d");
+    const overlay = document.getElementById("markerOverlay");
+    const viewerModal = document.getElementById("viewerModal");
     const panoContainer = document.getElementById("pano");
     let viewer;
 
-    // Track all markers and their image history
-    let markerData = [];
+    let projectData = {
+      pdf: null,
+      markers: []
+    };
 
-    upload.addEventListener("change", (e) => {
+    document.getElementById("pdfUpload").addEventListener("change", (e) => {
       const file = e.target.files[0];
       const reader = new FileReader();
-      reader.onload = (event) => {
-        floorplan.style.backgroundImage = `url(${event.target.result})`;
+      reader.onload = function(event) {
+        projectData.pdf = event.target.result;
+        loadPDF(event.target.result);
       };
       reader.readAsDataURL(file);
     });
 
-    floorplan.addEventListener("click", (e) => {
-      const rect = floorplan.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const marker = document.createElement("div");
-      marker.className = "marker";
-      marker.style.left = `${x}px`;
-      marker.style.top = `${y}px`;
-
-      const id = Date.now();
-      const imageHistory = [];
-
-      marker.onclick = () => showUploadDialog(id);
-      floorplan.appendChild(marker);
-      markerData.push({ id, x, y, imageHistory });
+    document.getElementById("pageSelect").addEventListener("change", (e) => {
+      currentPage = parseInt(e.target.value);
+      renderPage(currentPage);
     });
 
-    function showUploadDialog(id) {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.onchange = (e) => {
-        const file = e.target.files[0];
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const marker = markerData.find(m => m.id === id);
-          marker.imageHistory.push({ time: new Date().toISOString(), url: event.target.result });
-          view360(event.target.result);
-        };
-        reader.readAsDataURL(file);
+    document.getElementById("saveProject").addEventListener("click", () => {
+      const blob = new Blob([JSON.stringify(projectData)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "project.json";
+      a.click();
+    });
+
+    document.getElementById("loadProject").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        projectData = JSON.parse(event.target.result);
+        loadPDF(projectData.pdf);
+        loadMarkers();
       };
-      input.click();
+      reader.readAsText(file);
+    });
+
+    function loadPDF(dataUrl) {
+      const loadingTask = pdfjsLib.getDocument(dataUrl);
+      loadingTask.promise.then((pdf) => {
+        pdfDoc = pdf;
+        const select = document.getElementById("pageSelect");
+        select.innerHTML = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const option = document.createElement("option");
+          option.value = i;
+          option.textContent = `Page ${i}`;
+          select.appendChild(option);
+        }
+        renderPage(currentPage);
+      });
+    }
+
+    function renderPage(pageNum) {
+      pdfDoc.getPage(pageNum).then((page) => {
+        const viewport = page.getViewport({ scale: 1.5 });
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        overlay.style.width = canvas.width + "px";
+        overlay.style.height = canvas.height + "px";
+
+        const renderContext = {
+          canvasContext: ctx,
+          viewport: viewport
+        };
+        page.render(renderContext);
+      });
+    }
+
+    canvas.addEventListener("click", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const name = prompt("Enter location name:");
+      if (!name) return;
+
+      const marker = { id: Date.now(), name, x, y, history: [] };
+      projectData.markers.push(marker);
+      drawMarker(marker);
+      updateMarkerList();
+    });
+
+    function drawMarker(marker) {
+      const btn = document.createElement("button");
+      btn.className = "absolute bg-yellow-500 text-black rounded-full w-5 h-5 text-xs font-bold pointer-events-auto";
+      btn.style.left = `${marker.x}px`;
+      btn.style.top = `${marker.y}px`;
+      btn.textContent = "+";
+      btn.title = marker.name;
+      btn.onclick = () => {
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = "image/*";
+        fileInput.onchange = (e) => {
+          const file = e.target.files[0];
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            marker.history.push({ timestamp: new Date().toISOString(), url: event.target.result });
+            updateMarkerList();
+            view360(event.target.result);
+          };
+          reader.readAsDataURL(file);
+        };
+        fileInput.click();
+      };
+      overlay.appendChild(btn);
+    }
+
+    function loadMarkers() {
+      overlay.innerHTML = "";
+      projectData.markers.forEach(drawMarker);
+      updateMarkerList();
+    }
+
+    function updateMarkerList() {
+      const list = document.getElementById("markerList");
+      list.innerHTML = '<h2 class="font-semibold mt-4">Markers</h2>';
+      projectData.markers.forEach((marker) => {
+        const div = document.createElement("div");
+        div.className = "bg-gray-700 p-2 rounded";
+        const title = document.createElement("div");
+        title.className = "font-semibold";
+        title.textContent = marker.name;
+
+        const history = document.createElement("select");
+        history.className = "w-full text-black mt-1";
+        history.innerHTML = marker.history.map((h, i) => `<option value='${i}'>${new Date(h.timestamp).toLocaleString()}</option>`).join("");
+
+        const viewBtn = document.createElement("button");
+        viewBtn.className = "mt-1 w-full bg-yellow-500 text-black rounded px-2 py-1";
+        viewBtn.textContent = "View Selected";
+        viewBtn.onclick = () => {
+          const idx = history.value;
+          view360(marker.history[idx].url);
+        };
+
+        div.appendChild(title);
+        div.appendChild(history);
+        div.appendChild(viewBtn);
+        list.appendChild(div);
+      });
     }
 
     function view360(imageURL) {
-      modal.classList.remove("hidden");
-      panoContainer.innerHTML = ""; // Clear previous
+      viewerModal.classList.remove("hidden");
+      panoContainer.innerHTML = "";
       viewer = new Marzipano.Viewer(panoContainer);
 
       const source = Marzipano.ImageUrlSource.fromString(imageURL);
       const geometry = new Marzipano.EquirectGeometry([{ width: 4000 }]);
-      const limiter = Marzipano.util.compose(
-        Marzipano.RectilinearView.limit.traditional(1024, 100 * Math.PI / 180),
-        Marzipano.RectilinearView.limit.vfov(30 * Math.PI / 180, 100 * Math.PI / 180)
-      );
-      const view = new Marzipano.RectilinearView(null, limiter);
+      const view = new Marzipano.RectilinearView();
       const scene = viewer.createScene({ source, geometry, view });
       scene.switchTo();
     }
 
     function closeViewer() {
-      modal.classList.add("hidden");
+      viewerModal.classList.add("hidden");
     }
   </script>
 </body>
